@@ -1,0 +1,16 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Projects collection
+    match /projects/{projectId} {
+      // Allow read/write access to project data
+      allow read, write: if true;
+      
+      // Participants subcollection
+      match /participants/{participantId} {
+        allow read, write: if true;
+      }
+    }
+  }
+}
