@@ -73,7 +73,7 @@ function AutoAffinityMap({ projectId }) {
   // Auto-grouping settings
   const [numGroups, setNumGroups] = useState(5);
   const [similarityThreshold, setSimilarityThreshold] = useState(0.3);
-  const [groupingMethod, setGroupingMethod] = useState('keyword');
+  const [groupingMethod, setGroupingMethod] = useState('semantic');
   const [includeQuestions, setIncludeQuestions] = useState(true);
 
   // Load project data and extract responses
@@ -310,6 +310,8 @@ function AutoAffinityMap({ projectId }) {
   // Group responses by semantic similarity
   const groupBySemanticSimilarity = () => {
     try {
+      console.log('Starting semantic similarity grouping');
+      
       // Start with empty groups
       const newGroups = Array.from({ length: numGroups }, (_, i) => ({
         id: `auto-group-${Date.now()}-${i}`,
@@ -418,6 +420,11 @@ function AutoAffinityMap({ projectId }) {
       }
       
       // Generate summaries and names for each group
+      const categoryNames = [
+        'Financial', 'Spending', 'Savings', 'Bills', 'Groceries', 
+        'Transport', 'Entertainment', 'Food', 'Shopping', 'Investments'
+      ];
+      
       for (let i = 0; i < newGroups.length; i++) {
         const group = newGroups[i];
         const groupResponses = responsesToGroup.filter(r => r.groupId === group.id);
@@ -425,6 +432,7 @@ function AutoAffinityMap({ projectId }) {
         if (groupResponses.length > 0) {
           // Get all response texts in this group
           const responseTexts = groupResponses.map(r => r.response);
+          const combinedText = responseTexts.join(' ').toLowerCase();
           
           // Generate summary
           group.summary = semanticSimilarity.generateGroupSummary(responseTexts);
@@ -433,34 +441,42 @@ function AutoAffinityMap({ projectId }) {
           const allText = responseTexts.join(' ');
           group.keywords = semanticSimilarity.extractKeywords(allText, 10);
           
-          // Generate distinctive name - avoid using "today?" as the group name
-          const otherGroupKeywords = newGroups
-            .filter((_, idx) => idx !== i)
-            .map(g => g.keywords);
+          // Assign a distinctive name based on content
+          let groupName = '';
           
-          // Find a distinctive keyword that's not "today?" or a question word
-          let bestKeyword = null;
-          for (const keyword of group.keywords) {
-            // Skip common question words and "today?"
-            if (keyword === 'today?' || keyword === 'today' || keyword === 'what' || 
-                keyword === 'which' || keyword === 'where' || keyword === 'when' ||
-                keyword === 'how' || keyword === 'why' || keyword === 'did' ||
-                keyword === 'do' || keyword === 'does') {
-              continue;
-            }
-            
-            // Use this keyword
-            bestKeyword = keyword;
-            break;
+          // Check for specific financial activities in the responses
+          if (combinedText.includes('fuel') || combinedText.includes('gas') || combinedText.includes('petrol')) {
+            groupName = 'Fuel Expenses';
+          } else if (combinedText.includes('coffee') || combinedText.includes('cafe')) {
+            groupName = 'Coffee & Cafes';
+          } else if (combinedText.includes('groceries') || combinedText.includes('supermarket')) {
+            groupName = 'Grocery Shopping';
+          } else if (combinedText.includes('bill') || combinedText.includes('bills') || combinedText.includes('payment')) {
+            groupName = 'Bill Payments';
+          } else if (combinedText.includes('check') || combinedText.includes('balance') || combinedText.includes('account')) {
+            groupName = 'Account Checking';
+          } else if (combinedText.includes('transfer') || combinedText.includes('sent money')) {
+            groupName = 'Money Transfers';
+          } else if (combinedText.includes('save') || combinedText.includes('saving') || combinedText.includes('savings')) {
+            groupName = 'Savings Activities';
+          } else if (combinedText.includes('spend') || combinedText.includes('purchase') || combinedText.includes('buy')) {
+            groupName = 'General Spending';
+          } else if (combinedText.includes('dinner') || combinedText.includes('lunch') || combinedText.includes('restaurant')) {
+            groupName = 'Dining Out';
+          } else if (combinedText.includes('online') || combinedText.includes('shopping')) {
+            groupName = 'Online Shopping';
+          } else {
+            // Use a category name if no specific activity is detected
+            groupName = `${categoryNames[i % categoryNames.length]} Activities`;
           }
           
-          // If we found a good keyword, use it; otherwise use the default name
-          if (bestKeyword) {
-            // Capitalize first letter
-            group.name = `${bestKeyword.charAt(0).toUpperCase() + bestKeyword.slice(1)} Group`;
-          }
+          // Assign the name
+          group.name = groupName;
+          
+          console.log(`Created group: ${groupName} with ${groupResponses.length} responses`);
         } else {
           group.summary = 'No responses in this group';
+          group.name = `Empty Group ${i+1}`;
         }
       }
       
@@ -479,6 +495,8 @@ function AutoAffinityMap({ projectId }) {
         }
         usedNames.add(group.name);
       });
+      
+      console.log('Final group names:', newGroups.map(g => g.name));
       
       // Update state
       setGroups(newGroups);
@@ -501,9 +519,14 @@ function AutoAffinityMap({ projectId }) {
     try {
       setProcessing(true);
       
+      // Log the current grouping method for debugging
+      console.log(`Using grouping method: ${groupingMethod}`);
+      
       if (groupingMethod === 'keyword') {
+        console.log('Running keyword-based grouping');
         groupByKeywordSimilarity();
       } else if (groupingMethod === 'semantic') {
+        console.log('Running semantic-based grouping');
         groupBySemanticSimilarity();
       }
       
