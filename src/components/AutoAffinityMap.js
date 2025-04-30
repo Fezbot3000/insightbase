@@ -27,7 +27,14 @@ import {
   Switch,
   FormControlLabel,
   Menu,
-  LinearProgress
+  LinearProgress,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
+  Tabs,
+  Tab,
+  Chip,
+  Badge
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -38,10 +45,23 @@ import SaveIcon from '@mui/icons-material/Save';
 import ShuffleIcon from '@mui/icons-material/Shuffle';
 import FileDownloadIcon from '@mui/icons-material/FileDownload';
 import AssessmentIcon from '@mui/icons-material/Assessment';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import SentimentSatisfiedAltIcon from '@mui/icons-material/SentimentSatisfiedAlt';
+import SentimentDissatisfiedIcon from '@mui/icons-material/SentimentDissatisfied';
+import AssignmentIcon from '@mui/icons-material/Assignment';
+import FilterListIcon from '@mui/icons-material/FilterList';
+import MoodIcon from '@mui/icons-material/Mood';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
+import CloudIcon from '@mui/icons-material/Cloud';
+import InfoIcon from '@mui/icons-material/Info';
+import DownloadIcon from '@mui/icons-material/Download';
 import { db } from '../firebase';
-import { doc, getDoc, setDoc, collection, getDocs } from 'firebase/firestore';
+import { doc, getDoc, setDoc, collection, getDocs, query, where } from 'firebase/firestore';
 import semanticSimilarity from '../utils/semanticSimilarity';
 import stopwords from '../utils/stopwords';
+import { performAffinityMapping } from '../utils/affinityMapping';
+import { performSemanticClustering } from '../utils/semanticClustering';
 
 // Color palette for affinity groups
 const colorPalette = [
@@ -57,100 +77,302 @@ const colorPalette = [
   '#455a64', // Blue Grey
 ];
 
-function AutoAffinityMap({ projectId }) {
+function Synthesis({ projectId }) {
+  const [responses, setResponses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
-  const [responses, setResponses] = useState([]);
   const [groups, setGroups] = useState([]);
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
-  const [newGroupName, setNewGroupName] = useState('');
-  const [editingGroup, setEditingGroup] = useState(null);
+  const [activeTab, setActiveTab] = useState('wordcloud');
+  const [taskGroups, setTaskGroups] = useState([]);
+  const [moodGroups, setMoodGroups] = useState([]);
+  const [expandedAccordions, setExpandedAccordions] = useState({});
+  const [filterDialogOpen, setFilterDialogOpen] = useState(false);
+  const [visibleCategories, setVisibleCategories] = useState({
+    painPoints: true,
+    nonPainPoints: true,
+    tasks: {},
+    moods: {},
+    clusters: {}
+  });
+  const [currentFilters, setCurrentFilters] = useState({
+    painPoints: true,
+    nonPainPoints: true,
+    tasks: {},
+    moods: {}
+  });
   const [snackbarOpen, setSnackbarOpen] = useState(false);
   const [snackbarMessage, setSnackbarMessage] = useState('');
   const [snackbarSeverity, setSnackbarSeverity] = useState('success');
-
+  const [exportMenuAnchorEl, setExportMenuAnchorEl] = useState(null);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  
+  // Word cloud state
+  const [wordCloudData, setWordCloudData] = useState([]);
+  const [wordCloudMax, setWordCloudMax] = useState(100);
+  
   // Auto-grouping settings
   const [numGroups, setNumGroups] = useState(5);
   const [similarityThreshold, setSimilarityThreshold] = useState(0.3);
   const [groupingMethod, setGroupingMethod] = useState('semantic');
   const [includeQuestions, setIncludeQuestions] = useState(true);
 
+  // New state for semantic clusters
+  const [semanticClusters, setSemanticClusters] = useState([]);
+  const [clusteringInProgress, setClusteringInProgress] = useState(false);
+
+  // Dialog state
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [settingsDialogOpen, setSettingsDialogOpen] = useState(false);
+  const [newGroupName, setNewGroupName] = useState('');
+  const [editingGroup, setEditingGroup] = useState(null);
+
   // Load project data and extract responses
   useEffect(() => {
     const loadProjectData = async () => {
-      if (!projectId) {
-        setLoading(false);
-        return;
-      }
-
       try {
         setLoading(true);
         
-        // Load project data
-        const projectRef = doc(db, 'projects', projectId);
-        const projectSnap = await getDoc(projectRef);
-        
-        if (projectSnap.exists()) {
-          const projectData = projectSnap.data();
-          
-          // Load participants
-          const participantsResponses = [];
-          const participantsCollectionRef = collection(db, `projects/${projectId}/participants`);
-          const participantsSnap = await getDocs(participantsCollectionRef);
-          
-          participantsSnap.forEach((doc) => {
-            const participant = { id: doc.id, ...doc.data() };
-            
-            // Extract responses
-            if (participant.responses && participant.responses.length > 0) {
-              participant.responses.forEach(response => {
-                participantsResponses.push({
-                  id: `${participant.id}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-                  participantId: participant.id,
-                  responseId: response.id || Date.now().toString(),
-                  question: response.question,
-                  response: response.response,
-                  date: response.date,
-                  groupId: null, // Initially not assigned to any group
-                  keywords: extractKeywords(response.response, response.question)
-                });
-              });
-            }
-          });
-          
-          setResponses(participantsResponses);
-          
-          // Load affinity groups if they exist
-          if (projectData.autoAffinityGroups) {
-            setGroups(projectData.autoAffinityGroups);
-            
-            // Update responses with group assignments
-            if (projectData.autoAffinityAssignments) {
-              const updatedResponses = participantsResponses.map(response => {
-                const assignment = projectData.autoAffinityAssignments.find(
-                  a => a.responseId === response.responseId && a.participantId === response.participantId
-                );
-                
-                return {
-                  ...response,
-                  groupId: assignment?.groupId || null
-                };
-              });
-              
-              setResponses(updatedResponses);
-            }
+        // Sample data for testing when Firebase permissions are unavailable
+        const sampleResponses = [
+          {
+            id: '1',
+            participantId: 'user1',
+            response: 'I checked my bank account balance this morning and paid my electricity bill.',
+            date: new Date().toISOString(),
+            question: 'What did you do with your money today?'
+          },
+          {
+            id: '2',
+            participantId: 'user2',
+            response: 'I felt anxious about my credit card debt so I created a budget plan to pay it off.',
+            date: new Date().toISOString(),
+            question: 'What did you do with your money today?'
+          },
+          {
+            id: '3',
+            participantId: 'user3',
+            response: 'I went grocery shopping and tried to stick to my shopping list to avoid impulse purchases.',
+            date: new Date().toISOString(),
+            question: 'What did you do with your money today?'
+          },
+          {
+            id: '4',
+            participantId: 'user4',
+            response: 'I saved $50 in my emergency fund and felt good about making progress on my financial goals.',
+            date: new Date().toISOString(),
+            question: 'What did you do with your money today?'
+          },
+          {
+            id: '5',
+            participantId: 'user5',
+            response: 'I was stressed about an unexpected car repair bill that I had to put on my credit card.',
+            date: new Date().toISOString(),
+            question: 'What did you do with your money today?'
+          },
+          {
+            id: '6',
+            participantId: 'user6',
+            response: 'I compared prices online before buying a new laptop to make sure I got the best deal.',
+            date: new Date().toISOString(),
+            question: 'What did you do with your money today?'
+          },
+          {
+            id: '7',
+            participantId: 'user7',
+            response: 'I transferred money to my savings account for my upcoming vacation.',
+            date: new Date().toISOString(),
+            question: 'What did you do with your money today?'
+          },
+          {
+            id: '8',
+            participantId: 'user8',
+            response: 'I reviewed my investment portfolio and decided to increase my monthly contributions.',
+            date: new Date().toISOString(),
+            question: 'What did you do with your money today?'
+          },
+          {
+            id: '9',
+            participantId: 'user9',
+            response: 'I bought coffee and lunch at work even though I know I should bring food from home to save money.',
+            date: new Date().toISOString(),
+            question: 'What did you do with your money today?'
+          },
+          {
+            id: '10',
+            participantId: 'user10',
+            response: 'I used a budgeting app to track my spending for the day and realized I\'m over budget for the month.',
+            date: new Date().toISOString(),
+            question: 'What did you do with your money today?'
+          },
+          {
+            id: '11',
+            participantId: 'user11',
+            response: 'I felt happy that I was able to pay all my bills on time this month without any overdrafts.',
+            date: new Date().toISOString(),
+            question: 'What did you do with your money today?'
+          },
+          {
+            id: '12',
+            participantId: 'user12',
+            response: 'I researched different credit cards to find one with better rewards for my spending habits.',
+            date: new Date().toISOString(),
+            question: 'What did you do with your money today?'
           }
+        ];
+        
+        // Try to get project data from Firebase
+        let responseData = [];
+        
+        try {
+          // Get project data
+          const projectRef = doc(db, 'projects', projectId);
+          const projectSnap = await getDoc(projectRef);
+          
+          if (projectSnap.exists()) {
+            // Get responses for this project
+            const responsesRef = collection(db, 'responses');
+            const q = query(responsesRef, where('projectId', '==', projectId));
+            const querySnapshot = await getDocs(q);
+            
+            querySnapshot.forEach((doc) => {
+              responseData.push({ id: doc.id, ...doc.data() });
+            });
+          }
+        } catch (error) {
+          console.error('Error loading project data:', error);
+          // Use sample data if Firebase data loading fails
+          responseData = sampleResponses;
+          
+          // Show a message about using sample data
+          setSnackbarMessage('Using sample data for demonstration');
+          setSnackbarSeverity('info');
+          setSnackbarOpen(true);
         }
-      } catch (error) {
-        console.error('Error loading project data:', error);
-      } finally {
+        
+        // If no data was loaded from Firebase, use sample data
+        if (responseData.length === 0) {
+          responseData = sampleResponses;
+          
+          // Show a message about using sample data
+          setSnackbarMessage('Using sample data for demonstration');
+          setSnackbarSeverity('info');
+          setSnackbarOpen(true);
+        }
+        
+        setResponses(responseData);
+        
+        // Generate initial groupings
+        await generateAffinityGroups(responseData);
+        
         setLoading(false);
+      } catch (error) {
+        console.error('Error in loadProjectData:', error);
+        setLoading(false);
+        
+        // Show error message
+        setSnackbarMessage('Error loading data: ' + error.message);
+        setSnackbarSeverity('error');
+        setSnackbarOpen(true);
       }
     };
     
-    loadProjectData();
+    if (projectId) {
+      loadProjectData();
+    } else {
+      // If no projectId is provided, use sample data
+      const sampleResponses = [
+        {
+          id: '1',
+          participantId: 'user1',
+          response: 'I checked my bank account balance this morning and paid my electricity bill.',
+          date: new Date().toISOString(),
+          question: 'What did you do with your money today?'
+        },
+        {
+          id: '2',
+          participantId: 'user2',
+          response: 'I felt anxious about my credit card debt so I created a budget plan to pay it off.',
+          date: new Date().toISOString(),
+          question: 'What did you do with your money today?'
+        },
+        {
+          id: '3',
+          participantId: 'user3',
+          response: 'I went grocery shopping and tried to stick to my shopping list to avoid impulse purchases.',
+          date: new Date().toISOString(),
+          question: 'What did you do with your money today?'
+        },
+        {
+          id: '4',
+          participantId: 'user4',
+          response: 'I saved $50 in my emergency fund and felt good about making progress on my financial goals.',
+          date: new Date().toISOString(),
+          question: 'What did you do with your money today?'
+        },
+        {
+          id: '5',
+          participantId: 'user5',
+          response: 'I was stressed about an unexpected car repair bill that I had to put on my credit card.',
+          date: new Date().toISOString(),
+          question: 'What did you do with your money today?'
+        }
+      ];
+      
+      setResponses(sampleResponses);
+      generateAffinityGroups(sampleResponses);
+      setLoading(false);
+      
+      // Show a message about using sample data
+      setSnackbarMessage('Using sample data for demonstration');
+      setSnackbarSeverity('info');
+      setSnackbarOpen(true);
+    }
   }, [projectId]);
+  
+  // Generate affinity groups based on responses
+  const generateAffinityGroups = async (responseData) => {
+    if (!responseData || responseData.length === 0) return;
+    
+    // Generate word cloud data
+    generateWordCloudData(responseData);
+    
+    // Generate task groups
+    categorizeTasks(responseData);
+    
+    // Generate mood groups
+    categorizeMoods(responseData);
+    
+    // Generate semantic clusters using the new algorithm
+    try {
+      setClusteringInProgress(true);
+      console.log('Starting advanced semantic clustering...');
+      
+      // Use the new semantic clustering algorithm with advanced options
+      const clusters = await performSemanticClustering(responseData, {
+        distanceThreshold: 0.4, // Adjust similarity threshold (lower = more clusters)
+        minClusterSize: 2       // Minimum responses per cluster
+      });
+      
+      console.log('Semantic clustering complete:', clusters);
+      setSemanticClusters(clusters);
+      
+      // Initialize visibility state for clusters
+      const clusterVisibility = {};
+      clusters.forEach(cluster => {
+        clusterVisibility[cluster.group_name] = true;
+      });
+      
+      setVisibleCategories(prev => ({
+        ...prev,
+        clusters: clusterVisibility
+      }));
+      
+      setClusteringInProgress(false);
+    } catch (error) {
+      console.error('Error generating semantic clusters:', error);
+      setClusteringInProgress(false);
+    }
+  };
 
   // Extract keywords from text
   const extractKeywords = (text, question = '') => {
@@ -158,6 +380,277 @@ function AutoAffinityMap({ projectId }) {
     const textToProcess = includeQuestions ? `${question} ${text}` : text;
     
     return semanticSimilarity.extractKeywords(textToProcess, 10);
+  };
+
+  // Analyze text for pain points
+  const isPainPoint = (text) => {
+    const painPointIndicators = [
+      'frustrat', 'annoy', 'difficult', 'hard', 'problem', 'issue', 'trouble', 
+      'fail', 'confus', 'disappoint', 'bad', 'hate', 'dislike', 'struggle', 
+      'complain', 'concern', 'worry', 'stress', 'anxious', 'angry', 'upset',
+      'error', 'bug', 'glitch', 'crash', 'slow', 'broken', 'not working', 
+      'couldn\'t', 'can\'t', 'unable', 'impossible', 'never', 'terrible',
+      'awful', 'horrible', 'poor', 'waste', 'lost', 'missing'
+    ];
+    
+    const text_lower = text.toLowerCase();
+    const foundIndicators = [];
+    
+    painPointIndicators.forEach(indicator => {
+      if (text_lower.includes(indicator)) {
+        foundIndicators.push(indicator);
+      }
+    });
+    
+    return {
+      isPain: foundIndicators.length > 0,
+      indicators: foundIndicators
+    };
+  };
+
+  // Categorize responses into pain points and non-pain points
+  const categorizePainPoints = () => {
+    const painPoints = [];
+    const nonPainPoints = [];
+    
+    responses.forEach(response => {
+      const analysis = isPainPoint(response.response);
+      const enrichedResponse = {
+        ...response,
+        painAnalysis: analysis
+      };
+      
+      if (analysis.isPain) {
+        painPoints.push(enrichedResponse);
+      } else {
+        nonPainPoints.push(enrichedResponse);
+      }
+    });
+    
+    // Update state
+    setVisibleCategories(prev => ({
+      ...prev,
+      painPoints: painPoints.length > 0,
+      nonPainPoints: nonPainPoints.length > 0
+    }));
+  };
+
+  // Identify tasks from responses
+  const identifyTasks = (text) => {
+    // Define broader task categories with related verbs and phrases
+    const taskCategories = {
+      'financial_management': [
+        'check balance', 'check account', 'transfer money', 'transfer funds', 'pay bill', 
+        'withdraw', 'deposit', 'save money', 'budget', 'invest', 'spending', 'payment',
+        'transaction', 'bank', 'banking', 'finance', 'financial', 'money', 'cash', 'credit',
+        'debit', 'loan', 'mortgage', 'insurance'
+      ],
+      'shopping': [
+        'buy', 'purchase', 'shop', 'order', 'cart', 'checkout', 'store', 'mall', 'online shopping',
+        'retail', 'grocery', 'supermarket', 'food shopping', 'clothes shopping'
+      ],
+      'planning': [
+        'plan', 'schedule', 'organize', 'arrange', 'prepare', 'calendar', 'appointment',
+        'meeting', 'event', 'reminder', 'deadline', 'goal', 'target', 'objective'
+      ],
+      'research': [
+        'research', 'search', 'look for', 'find', 'investigate', 'explore', 'browse',
+        'read about', 'learn about', 'study', 'analyze', 'compare', 'review'
+      ],
+      'transportation': [
+        'drive', 'commute', 'travel', 'trip', 'journey', 'car', 'bus', 'train', 'flight',
+        'ticket', 'booking', 'reservation', 'parking', 'gas', 'fuel'
+      ]
+    };
+    
+    const text_lower = text.toLowerCase();
+    const detectedTasks = new Set();
+    
+    // Check for each task category
+    Object.entries(taskCategories).forEach(([category, indicators]) => {
+      indicators.forEach(indicator => {
+        if (text_lower.includes(indicator)) {
+          detectedTasks.add(category);
+        }
+      });
+    });
+    
+    // If no specific tasks detected, categorize as 'other'
+    if (detectedTasks.size === 0) {
+      return ['other'];
+    }
+    
+    return Array.from(detectedTasks);
+  };
+
+  // Categorize responses by tasks
+  const categorizeTasks = (responseData) => {
+    const taskMap = {};
+    
+    responseData.forEach(response => {
+      const tasks = identifyTasks(response.response);
+      
+      tasks.forEach(task => {
+        if (!taskMap[task]) {
+          taskMap[task] = [];
+        }
+        taskMap[task].push(response);
+      });
+    });
+    
+    // Convert map to array of task groups
+    const taskGroupsArray = Object.entries(taskMap).map(([task, responses]) => ({
+      id: `task-${task.replace(/\s+/g, '-')}`,
+      name: task.charAt(0).toUpperCase() + task.slice(1),
+      responses,
+      count: responses.length
+    })).sort((a, b) => b.count - a.count);
+    
+    // Debug: Log the task groups to console
+    console.log('Task Groups:', taskGroupsArray);
+    console.log('Total task categories:', taskGroupsArray.length);
+    taskGroupsArray.forEach(group => {
+      console.log(`${group.name}: ${group.count} responses`);
+    });
+    
+    setTaskGroups(taskGroupsArray);
+    
+    // Update visibility state for tasks
+    const taskVisibility = {};
+    taskGroupsArray.forEach(group => {
+      taskVisibility[group.id] = true;
+    });
+    setVisibleCategories(prev => ({
+      ...prev,
+      tasks: taskVisibility
+    }));
+  };
+
+  // Analyze text for mood/emotion
+  const identifyMood = (text) => {
+    // Define broader mood categories with multiple indicators for each
+    const moodCategories = {
+      'positive': [
+        'happy', 'glad', 'pleased', 'delighted', 'satisfied', 'content', 'joy', 'excited', 'great',
+        'good', 'wonderful', 'fantastic', 'amazing', 'excellent', 'love', 'enjoy', 'like', 'appreciate',
+        'grateful', 'thankful', 'relieved', 'proud', 'confident', 'optimistic', 'hopeful'
+      ],
+      'negative': [
+        'frustrat', 'annoy', 'irritat', 'upset', 'angry', 'mad', 'furious', 'rage',
+        'sad', 'unhappy', 'disappoint', 'depress', 'miserable', 'terrible', 'awful',
+        'hate', 'dislike', 'disgusted', 'fed up', 'tired of', 'sick of', 'bad', 'poor',
+        'horrible', 'dreadful', 'regret'
+      ],
+      'anxious': [
+        'anxious', 'nervous', 'worry', 'concern', 'stress', 'tense', 'uneasy', 'afraid',
+        'fear', 'scared', 'dread', 'panic', 'alarm', 'apprehensive', 'troubled',
+        'uncertain', 'unsure', 'doubt', 'hesitant', 'reluctant'
+      ],
+      'neutral': [
+        'ok', 'fine', 'alright', 'neutral', 'normal', 'regular', 'usual', 'typical',
+        'standard', 'average', 'moderate', 'acceptable', 'adequate', 'reasonable',
+        'fair', 'decent', 'satisfactory'
+      ]
+    };
+    
+    const text_lower = text.toLowerCase();
+    const moodScores = {};
+    
+    // Initialize scores for each mood category
+    Object.keys(moodCategories).forEach(mood => {
+      moodScores[mood] = 0;
+    });
+    
+    // Calculate score for each mood category based on indicator presence
+    Object.entries(moodCategories).forEach(([mood, indicators]) => {
+      indicators.forEach(indicator => {
+        if (text_lower.includes(indicator)) {
+          moodScores[mood] += 1;
+        }
+      });
+    });
+    
+    // Analyze sentence structure for additional context
+    // Negative phrases often contain negations
+    if (text_lower.match(/\b(don't|doesn't|didn't|won't|can't|cannot|never|no|not)\b/g)) {
+      moodScores['negative'] += 1;
+    }
+    
+    // Exclamation marks often indicate strong emotions (positive or negative)
+    const exclamationCount = (text.match(/!/g) || []).length;
+    if (exclamationCount > 0) {
+      // If already leaning negative, amplify that
+      if (moodScores['negative'] > moodScores['positive']) {
+        moodScores['negative'] += exclamationCount;
+      } else {
+        moodScores['positive'] += exclamationCount;
+      }
+    }
+    
+    // Question marks might indicate uncertainty or anxiety
+    const questionCount = (text.match(/\?/g) || []).length;
+    if (questionCount > 1) { // Multiple questions suggest anxiety
+      moodScores['anxious'] += questionCount - 1;
+    }
+    
+    // Find the mood with the highest score
+    let highestScore = 0;
+    let dominantMood = 'neutral'; // Default to neutral
+    
+    Object.entries(moodScores).forEach(([mood, score]) => {
+      if (score > highestScore) {
+        highestScore = score;
+        dominantMood = mood;
+      }
+    });
+    
+    // If no strong indicators, return neutral
+    if (highestScore === 0) {
+      return 'neutral';
+    }
+    
+    return dominantMood;
+  };
+
+  // Categorize responses by mood
+  const categorizeMoods = (responseData) => {
+    const moodMap = {};
+    
+    responseData.forEach(response => {
+      const mood = identifyMood(response.response);
+      
+      if (!moodMap[mood]) {
+        moodMap[mood] = [];
+      }
+      moodMap[mood].push(response);
+    });
+    
+    // Convert map to array of mood groups
+    const moodGroupsArray = Object.entries(moodMap).map(([mood, responses]) => ({
+      id: `mood-${mood}`,
+      name: mood.charAt(0).toUpperCase() + mood.slice(1),
+      responses,
+      count: responses.length
+    })).sort((a, b) => b.count - a.count);
+    
+    // Debug: Log the mood groups to console
+    console.log('Mood Groups:', moodGroupsArray);
+    console.log('Total mood categories:', moodGroupsArray.length);
+    moodGroupsArray.forEach(group => {
+      console.log(`${group.name}: ${group.count} responses`);
+    });
+    
+    setMoodGroups(moodGroupsArray);
+    
+    // Update visibility state for moods
+    const moodVisibility = {};
+    moodGroupsArray.forEach(group => {
+      moodVisibility[group.id] = true;
+    });
+    setVisibleCategories(prev => ({
+      ...prev,
+      moods: moodVisibility
+    }));
   };
 
   // Calculate text similarity based on shared keywords
@@ -542,64 +1035,64 @@ function AutoAffinityMap({ projectId }) {
   // Save affinity map data to Firestore
   const saveAffinityData = async () => {
     try {
-      const projectRef = doc(db, 'projects', projectId);
-      const projectSnap = await getDoc(projectRef);
+      setProcessing(true);
       
-      if (projectSnap.exists()) {
-        const projectData = projectSnap.data();
-        
-        // Create assignments from responses
-        const affinityAssignments = responses
-          .filter(r => r.groupId)
-          .map(r => ({
-            participantId: r.participantId,
-            responseId: r.responseId,
-            groupId: r.groupId
-          }));
-        
-        await setDoc(projectRef, {
-          ...projectData,
-          autoAffinityGroups: groups,
-          autoAffinityAssignments: affinityAssignments
-        });
-        
-        showSnackbar('Affinity map saved successfully', 'success');
+      // Skip saving to Firebase if we're using sample data
+      if (!projectId) {
+        setSnackbarMessage('Affinity groups saved (demo mode)');
+        setSnackbarSeverity('success');
+        setSnackbarOpen(true);
+        setProcessing(false);
+        return;
       }
-    } catch (error) {
-      console.error('Error saving affinity data:', error);
-      showSnackbar('Error saving affinity map', 'error');
-    }
-  };
-
-  // Save specific values to Firestore (used for delete operations)
-  const saveAffinityDataWithValues = async (groupsToSave, responsesToSave) => {
-    try {
-      const projectRef = doc(db, 'projects', projectId);
-      const projectSnap = await getDoc(projectRef);
       
-      if (projectSnap.exists()) {
-        const projectData = projectSnap.data();
-        
-        // Create assignments from responses
-        const affinityAssignments = responsesToSave
-          .filter(r => r.groupId)
-          .map(r => ({
-            participantId: r.participantId,
-            responseId: r.responseId,
-            groupId: r.groupId
-          }));
-        
-        await setDoc(projectRef, {
-          ...projectData,
-          autoAffinityGroups: groupsToSave,
-          autoAffinityAssignments: affinityAssignments
+      // Prepare data for saving
+      const affinityData = {
+        autoAffinityGroups: semanticClusters.map(cluster => ({
+          id: cluster.cluster_id,
+          name: cluster.group_name,
+          summary: cluster.summary,
+          keywords: cluster.top_keywords || []
+        })),
+        autoAffinityAssignments: []
+      };
+      
+      // Create assignments
+      semanticClusters.forEach(cluster => {
+        cluster.responses.forEach(response => {
+          affinityData.autoAffinityAssignments.push({
+            responseId: response.id,
+            participantId: response.participantId,
+            groupId: cluster.cluster_id
+          });
         });
+      });
+      
+      // Save to Firebase
+      try {
+        const projectRef = doc(db, 'projects', projectId);
+        await setDoc(projectRef, { 
+          autoAffinityGroups: affinityData.autoAffinityGroups,
+          autoAffinityAssignments: affinityData.autoAffinityAssignments,
+          lastUpdated: new Date().toISOString()
+        }, { merge: true });
         
-        showSnackbar('Affinity map saved successfully', 'success');
+        setSnackbarMessage('Affinity groups saved successfully');
+        setSnackbarSeverity('success');
+      } catch (error) {
+        console.error('Error saving affinity data:', error);
+        setSnackbarMessage('Error saving affinity groups: ' + error.message);
+        setSnackbarSeverity('error');
       }
+      
+      setSnackbarOpen(true);
+      setProcessing(false);
     } catch (error) {
-      console.error('Error saving affinity data:', error);
-      showSnackbar('Error saving affinity map', 'error');
+      console.error('Error in saveAffinityData:', error);
+      setSnackbarMessage('Error: ' + error.message);
+      setSnackbarSeverity('error');
+      setSnackbarOpen(true);
+      setProcessing(false);
     }
   };
 
@@ -648,20 +1141,20 @@ function AutoAffinityMap({ projectId }) {
     }
   };
 
-  // Handle group deletion
-  const handleDeleteGroup = (groupId) => {
-    // Remove group
+  // Handle removing a group
+  const handleRemoveGroup = (groupId) => {
+    // Update groups
     const updatedGroups = groups.filter(g => g.id !== groupId);
     setGroups(updatedGroups);
     
-    // Unassign responses from this group
+    // Update responses to remove group assignment
     const updatedResponses = responses.map(r => 
       r.groupId === groupId ? { ...r, groupId: null } : r
     );
     setResponses(updatedResponses);
     
     // Save changes to Firestore immediately
-    saveAffinityDataWithValues(updatedGroups, updatedResponses);
+    saveAffinityData();
   };
 
   // Handle settings dialog
@@ -719,201 +1212,356 @@ function AutoAffinityMap({ projectId }) {
       let fileContent;
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       
-      if (format === 'json') {
-        // Prepare data for JSON export
-        exportData = {
-          projectId,
-          exportDate: new Date().toISOString(),
-          groups: groups.map(group => ({
-            id: group.id,
-            name: group.name,
-            summary: group.summary,
-            keywords: group.keywords,
-            responses: getGroupResponses(group.id).map(response => ({
-              id: response.id,
-              participantId: response.participantId,
-              question: response.question,
-              response: response.response,
-              date: response.date
-            }))
-          })),
-          unassignedResponses: getUnassignedResponses().map(response => ({
-            id: response.id,
-            participantId: response.participantId,
-            question: response.question,
-            response: response.response,
-            date: response.date
-          }))
-        };
-        
-        fileContent = JSON.stringify(exportData, null, 2);
-        fileName = `affinity-map-${timestamp}.json`;
-        
-        // Create and download the file
-        downloadFile(fileContent, fileName, 'application/json');
-        
-        showSnackbar('Affinity map exported as JSON', 'success');
-      } else if (format === 'csv') {
-        // Prepare data for CSV export
-        // Header row
-        const csvRows = [
-          ['Group ID', 'Group Name', 'Group Summary', 'Response ID', 'Participant ID', 'Question', 'Response', 'Date']
-        ];
-        
-        // Add data for each group and its responses
-        groups.forEach(group => {
-          const groupResponses = getGroupResponses(group.id);
-          
-          if (groupResponses.length === 0) {
-            // Add a row for empty groups
-            csvRows.push([
-              group.id,
-              group.name,
-              group.summary,
-              '', '', '', '', ''
-            ]);
-          } else {
-            // Add rows for each response in the group
-            groupResponses.forEach(response => {
-              csvRows.push([
-                group.id,
-                group.name,
-                group.summary,
-                response.id,
-                response.participantId,
-                response.question,
-                response.response,
-                response.date
-              ]);
-            });
-          }
-        });
-        
-        // Add unassigned responses
-        getUnassignedResponses().forEach(response => {
-          csvRows.push([
-            'UNASSIGNED',
-            'Unassigned Responses',
-            '',
-            response.id,
-            response.participantId,
-            response.question,
-            response.response,
-            response.date
-          ]);
-        });
-        
-        // Convert to CSV string
-        fileContent = csvRows.map(row => 
-          row.map(cell => 
-            // Escape quotes and wrap in quotes if contains comma, newline or quote
-            typeof cell === 'string' && (cell.includes(',') || cell.includes('\n') || cell.includes('"')) 
-              ? `"${cell.replace(/"/g, '""')}"` 
-              : cell
-          ).join(',')
-        ).join('\n');
-        
-        fileName = `affinity-map-${timestamp}.csv`;
-        
-        // Create and download the file
-        downloadFile(fileContent, fileName, 'text/csv');
-        
-        showSnackbar('Affinity map exported as CSV', 'success');
-      } else if (format === 'evaluation') {
-        // Prepare data for evaluation export - specialized format for AI analysis
-        exportData = {
-          projectId,
-          exportDate: new Date().toISOString(),
-          evaluationRequest: "Please evaluate the effectiveness of this affinity mapping based on the coherence of groups and the relevance of the summaries.",
-          groups: groups.map(group => ({
-            id: group.id,
-            name: group.name,
-            summary: group.summary,
-            keywords: group.keywords,
-            responses: getGroupResponses(group.id).map(response => ({
-              question: response.question,
-              response: response.response,
-            }))
-          }))
-        };
-        
-        fileContent = JSON.stringify(exportData, null, 2);
-        fileName = `affinity-map-evaluation-${timestamp}.json`;
-        
-        // Create and download the file
-        downloadFile(fileContent, fileName, 'application/json');
-        
-        showSnackbar('Evaluation data exported. Upload this file to get AI feedback on your groupings.', 'success');
+      console.log(`Starting export in ${format} format for ${activeTab} data...`);
+      
+      // Prepare export data based on active tab
+      if (activeTab === 'semantic') {
+        exportData = semanticClusters;
+      } else if (activeTab === 'tasks') {
+        exportData = taskGroups;
+      } else if (activeTab === 'moods') {
+        exportData = moodGroups;
+      } else {
+        exportData = wordCloudData;
       }
+      
+      // Convert to appropriate format
+      let content = '';
+      if (format === 'json') {
+        content = JSON.stringify(exportData, null, 2);
+      } else {
+        // Simple CSV conversion
+        const rows = [];
+        
+        // Add headers
+        if (activeTab === 'semantic' || activeTab === 'tasks' || activeTab === 'moods') {
+          rows.push(['Group Name', 'Response Count']);
+          exportData.forEach(group => {
+            rows.push([group.name || group.group_name, group.responses.length]);
+          });
+        } else {
+          rows.push(['Word', 'Frequency']);
+          exportData.forEach(item => {
+            rows.push([item.text, item.value]);
+          });
+        }
+        
+        content = rows.map(row => row.join(',')).join('\n');
+      }
+      
+      // Create download link
+      const blob = new Blob([content], { type: format === 'json' ? 'application/json' : 'text/csv' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = fileName;
+      
+      // Append to document, click, and clean up
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      setSnackbarMessage(`Downloaded ${activeTab} data as ${format.toUpperCase()}`);
+      setSnackbarSeverity('success');
     } catch (error) {
-      console.error('Error exporting affinity map:', error);
-      showSnackbar('Error exporting affinity map', 'error');
+      console.error('Export error:', error);
+      setSnackbarMessage('Export failed: ' + error.message);
+      setSnackbarSeverity('error');
     }
   };
 
-  // Helper function to download a file
-  const downloadFile = (content, fileName, contentType) => {
-    const blob = new Blob([content], { type: contentType });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = fileName;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+  // Export AI evaluation data
+  const exportAIEvaluation = () => {
+    try {
+      // Create comprehensive evaluation data structure
+      const evaluationData = {
+        exportDate: new Date().toISOString(),
+        evaluationRequest: "Please evaluate the effectiveness of this synthesis based on the coherence of groups and the relevance of the insights.",
+        projectId: projectId || "demo-project",
+        // Include all analysis types
+        wordCloud: {
+          data: wordCloudData,
+          maxFrequency: wordCloudMax
+        },
+        taskGroups: taskGroups.map(group => ({
+          id: group.id,
+          name: group.name,
+          count: group.count,
+          responses: group.responses.map(response => ({
+            id: response.id,
+            participantId: response.participantId,
+            response: response.response,
+            question: response.question,
+            date: response.date,
+            tasks: identifyTasks(response.response),
+            mood: identifyMood(response.response)
+          }))
+        })),
+        moodGroups: moodGroups.map(group => ({
+          id: group.id,
+          name: group.name,
+          count: group.count,
+          responses: group.responses.map(response => ({
+            id: response.id,
+            participantId: response.participantId,
+            response: response.response,
+            question: response.question,
+            date: response.date,
+            tasks: identifyTasks(response.response),
+            mood: identifyMood(response.response)
+          }))
+        })),
+        semanticClusters: semanticClusters.map(cluster => ({
+          cluster_id: cluster.cluster_id,
+          group_name: cluster.group_name,
+          summary: cluster.summary,
+          top_keywords: cluster.top_keywords,
+          responses: cluster.responses.map(response => ({
+            id: response.id,
+            participantId: response.participantId,
+            response: response.response,
+            question: response.question,
+            date: response.date,
+            tasks: identifyTasks(response.response),
+            mood: identifyMood(response.response)
+          }))
+        })),
+        allResponses: responses.map(response => ({
+          id: response.id,
+          participantId: response.participantId,
+          response: response.response,
+          question: response.question,
+          date: response.date,
+          tasks: identifyTasks(response.response),
+          mood: identifyMood(response.response)
+        }))
+      };
+      
+      // Convert to JSON
+      const content = JSON.stringify(evaluationData, null, 2);
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const fileName = `synthesis-complete-${timestamp}.json`;
+      
+      // Create and download file using a safer approach
+      const blob = new Blob([content], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      
+      // Create a temporary link element
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      link.style.display = 'none';
+      
+      // Safely add and remove the link
+      try {
+        document.body.appendChild(link);
+        link.click();
+        
+        // Use setTimeout to ensure the browser has time to process the download
+        setTimeout(() => {
+          try {
+            document.body.removeChild(link);
+          } catch (e) {
+            console.warn('Link element already removed:', e);
+          }
+          URL.revokeObjectURL(url);
+        }, 100);
+      } catch (e) {
+        console.error('Error with download link:', e);
+        // Fallback method if appendChild fails
+        link.dispatchEvent(new MouseEvent('click'));
+        URL.revokeObjectURL(url);
+      }
+      
+      console.log(`Complete synthesis file created: ${fileName}`);
+      setSnackbarMessage(`Complete synthesis data downloaded`);
+      setSnackbarSeverity('success');
+      setSnackbarOpen(true);
+    } catch (error) {
+      console.error('Error creating synthesis export file:', error);
+      setSnackbarMessage('Error creating export file: ' + error.message);
+      setSnackbarSeverity('error');
+      setSnackbarOpen(true);
+    }
+  };
+
+  // Export data directly (alternative method)
+  const exportDataDirectly = (format) => {
+    try {
+      let data = null;
+      let fileName = `affinity-map-${new Date().getTime()}.${format}`;
+      let mimeType = format === 'json' ? 'application/json' : 'text/csv';
+      
+      // Prepare data based on active tab
+      if (activeTab === 'semantic') {
+        data = semanticClusters;
+      } else if (activeTab === 'tasks') {
+        data = taskGroups;
+      } else if (activeTab === 'moods') {
+        data = moodGroups;
+      } else {
+        data = wordCloudData;
+      }
+      
+      // Convert to appropriate format
+      let content = '';
+      if (format === 'json') {
+        content = JSON.stringify(data, null, 2);
+      } else {
+        // Simple CSV conversion
+        const rows = [];
+        
+        // Add headers
+        if (activeTab === 'semantic' || activeTab === 'tasks' || activeTab === 'moods') {
+          rows.push(['Group Name', 'Response Count']);
+          data.forEach(group => {
+            rows.push([group.name || group.group_name, group.responses.length]);
+          });
+        } else {
+          rows.push(['Word', 'Frequency']);
+          data.forEach(item => {
+            rows.push([item.text, item.value]);
+          });
+        }
+        
+        content = rows.map(row => row.join(',')).join('\n');
+      }
+      
+      // Create download link
+      const blob = new Blob([content], { type: mimeType });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = fileName;
+      
+      // Append to document, click, and clean up
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      setSnackbarMessage(`Downloaded ${activeTab} data as ${format.toUpperCase()}`);
+      setSnackbarSeverity('success');
+    } catch (error) {
+      console.error('Export error:', error);
+      setSnackbarMessage('Export failed: ' + error.message);
+      setSnackbarSeverity('error');
+    }
   };
 
   // Handle export menu
-  const [exportMenuAnchorEl, setExportMenuAnchorEl] = useState(null);
-  
   const handleOpenExportMenu = (event) => {
     setExportMenuAnchorEl(event.currentTarget);
+    setExportMenuOpen(true);
   };
   
   const handleCloseExportMenu = () => {
     setExportMenuAnchorEl(null);
+    setExportMenuOpen(false);
+  };
+
+  // Handle accordion expansion
+  const handleAccordionChange = (accordionId) => (_, isExpanded) => {
+    setExpandedAccordions({
+      ...expandedAccordions,
+      [accordionId]: isExpanded
+    });
+  };
+
+  // Handle tab change
+  const handleTabChange = (event, newValue) => {
+    setActiveTab(newValue);
+  };
+
+  // Toggle filter dialog
+  const handleToggleFilterDialog = () => {
+    setFilterDialogOpen(!filterDialogOpen);
+  };
+
+  // Update filters
+  const handleFilterChange = (filterType, value) => {
+    setCurrentFilters(prev => ({
+      ...prev,
+      [filterType]: value
+    }));
+  };
+
+  // Handle filter dialog close
+  const handleFilterDialogClose = () => {
+    setFilterDialogOpen(false);
+  };
+
+  // Generate word cloud data
+  const generateWordCloudData = (responseData) => {
+    // Common stop words to exclude
+    const stopWords = new Set([
+      'a', 'about', 'above', 'after', 'again', 'against', 'all', 'am', 'an', 'and', 'any', 'are', 'aren\'t', 'as', 'at',
+      'be', 'because', 'been', 'before', 'being', 'below', 'between', 'both', 'but', 'by', 'can', 'can\'t', 'cannot',
+      'could', 'couldn\'t', 'did', 'didn\'t', 'do', 'does', 'doesn\'t', 'doing', 'don\'t', 'down', 'during', 'each',
+      'few', 'for', 'from', 'further', 'had', 'hadn\'t', 'has', 'hasn\'t', 'have', 'haven\'t', 'having', 'he', 'he\'d',
+      'he\'ll', 'he\'s', 'her', 'here', 'here\'s', 'hers', 'herself', 'him', 'himself', 'his', 'how', 'how\'s', 'i',
+      'i\'d', 'i\'ll', 'i\'m', 'i\'ve', 'if', 'in', 'into', 'is', 'isn\'t', 'it', 'it\'s', 'its', 'itself', 'let\'s',
+      'me', 'more', 'most', 'mustn\'t', 'my', 'myself', 'no', 'nor', 'not', 'of', 'off', 'on', 'once', 'only', 'or',
+      'other', 'ought', 'our', 'ours', 'ourselves', 'out', 'over', 'own', 'same', 'shan\'t', 'she', 'she\'d', 'she\'ll',
+      'she\'s', 'should', 'shouldn\'t', 'so', 'some', 'such', 'than', 'that', 'that\'s', 'the', 'their', 'theirs',
+      'them', 'themselves', 'then', 'there', 'there\'s', 'these', 'they', 'they\'d', 'they\'ll', 'they\'re', 'they\'ve',
+      'this', 'those', 'through', 'to', 'too', 'under', 'until', 'up', 'very', 'was', 'wasn\'t', 'we', 'we\'d', 'we\'ll',
+      'we\'re', 'we\'ve', 'were', 'weren\'t', 'what', 'what\'s', 'when', 'when\'s', 'where', 'where\'s', 'which',
+      'while', 'who', 'who\'s', 'whom', 'why', 'why\'s', 'with', 'won\'t', 'would', 'wouldn\'t', 'you', 'you\'d',
+      'you\'ll', 'you\'re', 'you\'ve', 'your', 'yours', 'yourself', 'yourselves', 'also', 'just', 'like', 'will',
+      'get', 'got', 'getting', 'go', 'going', 'went', 'gone', 'make', 'made', 'making', 'take', 'took', 'taking',
+      'taken', 'use', 'used', 'using', 'today', 'now', 'day', 'week', 'month', 'year', 'time', 'thing', 'things'
+    ]);
+    
+    // Combine all responses into one text
+    const allText = responseData.reduce((acc, response) => {
+      return acc + ' ' + response.response.toLowerCase();
+    }, '');
+    
+    // Tokenize and count word frequencies
+    const words = allText.match(/\b(\w+)\b/g) || [];
+    const wordCounts = {};
+    
+    words.forEach(word => {
+      if (!stopWords.has(word) && word.length > 2) {
+        wordCounts[word] = (wordCounts[word] || 0) + 1;
+      }
+    });
+    
+    // Convert to array format for visualization
+    const wordCountArray = Object.entries(wordCounts)
+      .map(([text, value]) => ({ text, value }))
+      .filter(item => item.value > 1) // Only include words that appear more than once
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 100); // Limit to top 100 words
+    
+    // Find the maximum frequency for scaling
+    const maxValue = wordCountArray.length > 0 ? wordCountArray[0].value : 0;
+    
+    // Debug: Log the word cloud data
+    console.log('Word Cloud Data:', wordCountArray.slice(0, 20));
+    console.log('Total unique words (appearing more than once):', wordCountArray.length);
+    console.log('Top 10 words:');
+    wordCountArray.slice(0, 10).forEach(word => {
+      console.log(`${word.text}: ${word.value} occurrences`);
+    });
+    
+    setWordCloudData(wordCountArray);
+    setWordCloudMax(maxValue);
   };
 
   return (
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h5">Automated Affinity Mapping</Typography>
+        <Typography variant="h5">Synthesis</Typography>
         <Box>
-          <Button 
-            variant="outlined" 
-            startIcon={<TuneIcon />} 
-            onClick={handleOpenSettingsDialog}
-            sx={{ mr: 1 }}
-          >
-            Settings
-          </Button>
-          <Button 
-            variant="outlined" 
-            startIcon={<FileDownloadIcon />} 
-            onClick={handleOpenExportMenu}
-            sx={{ mr: 1 }}
-            disabled={groups.length === 0}
-          >
-            Export
-          </Button>
-          <Button 
-            variant="outlined" 
-            startIcon={<SaveIcon />} 
-            onClick={saveAffinityData}
-            sx={{ mr: 1 }}
-          >
-            Save
-          </Button>
-          <Button 
-            variant="contained" 
-            color="primary"
-            startIcon={<AutoFixHighIcon />} 
-            onClick={handleAutoGenerateGroups}
-            disabled={processing || responses.length === 0}
-          >
-            Auto-Generate Groups
-          </Button>
+          <Tooltip title="Export Data">
+            <IconButton onClick={handleOpenExportMenu}>
+              <DownloadIcon />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Filter">
+            <IconButton onClick={handleToggleFilterDialog}>
+              <FilterListIcon />
+            </IconButton>
+          </Tooltip>
         </Box>
       </Box>
       
@@ -921,176 +1569,420 @@ function AutoAffinityMap({ projectId }) {
         <Box sx={{ display: 'flex', justifyContent: 'center', p: 5 }}>
           <CircularProgress />
         </Box>
-      ) : processing ? (
-        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', p: 5 }}>
-          <CircularProgress sx={{ mb: 2 }} />
-          <Typography>Analyzing responses and generating groups...</Typography>
-        </Box>
+      ) : responses.length === 0 ? (
+        <Alert severity="info" sx={{ mb: 3 }}>
+          No responses found. Add participant responses to start creating affinity maps.
+        </Alert>
       ) : (
-        <Grid container spacing={2}>
-          {/* Affinity Groups */}
-          <Grid item xs={12}>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-              <Typography variant="h6">Affinity Groups</Typography>
-              <Button 
-                variant="outlined" 
-                startIcon={<AddIcon />} 
-                onClick={() => handleOpenGroupDialog()}
-                size="small"
-              >
-                Add Group
-              </Button>
-            </Box>
-            
-            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, mb: 4 }}>
-              {groups.length === 0 ? (
-                <Paper sx={{ p: 3, width: '100%', textAlign: 'center' }}>
-                  <Typography color="text.secondary">
-                    No affinity groups yet. Click "Auto-Generate Groups" to analyze your responses and create groups automatically.
-                  </Typography>
-                </Paper>
-              ) : (
-                groups.map(group => (
-                  <Card 
-                    key={group.id} 
-                    sx={{ 
-                      width: 300,
-                      minHeight: 200,
-                      display: 'flex',
-                      flexDirection: 'column',
-                      borderTop: `4px solid ${group.color}`,
-                    }}
-                  >
-                    <CardHeader
-                      title={group.name}
-                      action={
-                        <Box>
-                          <IconButton 
-                            size="small" 
-                            onClick={() => handleOpenGroupDialog(group)}
-                            sx={{ mr: 1 }}
-                          >
-                            <EditIcon fontSize="small" />
-                          </IconButton>
-                          <IconButton 
-                            size="small" 
-                            onClick={() => handleDeleteGroup(group.id)}
-                          >
-                            <DeleteIcon fontSize="small" />
-                          </IconButton>
-                        </Box>
-                      }
-                      sx={{ 
-                        pb: 1,
-                        '& .MuiCardHeader-title': {
-                          fontSize: '1rem',
-                          fontWeight: 'bold'
-                        }
-                      }}
-                    />
-                    <Divider />
-                    <CardContent sx={{ pt: 1, pb: 1, backgroundColor: 'rgba(0,0,0,0.02)' }}>
-                      <Typography variant="body2" color="text.secondary">
-                        {group.summary}
-                      </Typography>
-                    </CardContent>
-                    <Divider />
-                    <CardContent sx={{ flexGrow: 1, overflowY: 'auto', maxHeight: 400 }}>
-                      {getGroupResponses(group.id).length === 0 ? (
-                        <Typography color="text.secondary" sx={{ fontStyle: 'italic', textAlign: 'center' }}>
-                          No responses in this group
-                        </Typography>
-                      ) : (
-                        getGroupResponses(group.id).map(response => (
-                          <Paper
-                            key={response.id}
-                            sx={{ 
-                              p: 1.5, 
-                              mb: 1.5, 
-                              position: 'relative',
-                            }}
-                          >
-                            <Typography variant="body2" sx={{ mb: 1, fontWeight: 'medium' }}>
-                              {response.question}
-                            </Typography>
-                            <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
-                              {response.response.length > 100 
-                                ? `${response.response.substring(0, 100)}...` 
-                                : response.response}
-                            </Typography>
-                            <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 1 }}>
-                              <Typography variant="caption" color="text.secondary">
-                                {response.participantId}
-                              </Typography>
-                              <Typography variant="caption" color="text.secondary">
-                                {new Date(response.date).toLocaleDateString()}
-                              </Typography>
-                            </Box>
-                          </Paper>
-                        ))
-                      )}
-                    </CardContent>
-                  </Card>
-                ))
-              )}
-            </Box>
-          </Grid>
+        <>
+          {/* New tabbed interface for different categorization methods */}
+          <Paper sx={{ mb: 3 }}>
+            <Tabs 
+              value={activeTab} 
+              onChange={handleTabChange}
+              sx={{ mb: 2, borderBottom: 1, borderColor: 'divider' }}
+            >
+              <Tab 
+                value="wordcloud" 
+                label="Word Cloud" 
+                icon={<CloudIcon />} 
+                iconPosition="start"
+              />
+              <Tab 
+                value="tasks" 
+                label="Tasks" 
+                icon={<AssignmentIcon />} 
+                iconPosition="start"
+              />
+              <Tab 
+                value="moods" 
+                label="Mood" 
+                icon={<MoodIcon />} 
+                iconPosition="start"
+              />
+              <Tab 
+                value="semantic" 
+                label="Semantic Clusters" 
+                icon={<InfoIcon />} 
+                iconPosition="start"
+              />
+            </Tabs>
+          </Paper>
           
-          {/* Unassigned Responses */}
-          <Grid item xs={12}>
-            <Typography variant="h6" gutterBottom>Unassigned Responses</Typography>
-            {getUnassignedResponses().length === 0 ? (
-              <Paper sx={{ p: 3, textAlign: 'center' }}>
-                <Typography color="text.secondary">
-                  All responses have been assigned to groups.
-                </Typography>
-              </Paper>
-            ) : (
-              Object.entries(getResponsesByQuestion()).map(([question, questionResponses]) => (
-                <Box key={question} sx={{ mb: 4 }}>
-                  <Paper 
-                    sx={{ 
-                      p: 2, 
-                      mb: 2, 
-                      backgroundColor: 'primary.light',
-                      color: 'primary.contrastText'
-                    }}
-                  >
-                    <Typography variant="subtitle1" fontWeight="bold">
-                      {question} ({questionResponses.length})
-                    </Typography>
-                  </Paper>
-                  <Grid container spacing={2}>
-                    {questionResponses.map(response => (
-                      <Grid item xs={12} sm={6} md={4} key={response.id}>
-                        <Paper
-                          sx={{ 
-                            p: 2, 
-                            height: '100%',
-                            display: 'flex',
-                            flexDirection: 'column',
+          {/* Filter button */}
+          <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
+            <Button 
+              startIcon={<FilterListIcon />} 
+              onClick={handleToggleFilterDialog}
+              color="primary"
+            >
+              Filter
+            </Button>
+          </Box>
+          
+          {/* Word Cloud Tab */}
+          {activeTab === "wordcloud" && (
+            <Box>
+              <Typography variant="h6" gutterBottom>
+                Word Cloud Analysis
+              </Typography>
+              
+              <Paper 
+                elevation={3} 
+                sx={{ 
+                  p: 3, 
+                  mb: 3, 
+                  minHeight: 400,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  position: 'relative',
+                  overflow: 'hidden'
+                }}
+              >
+                {wordCloudData.length === 0 ? (
+                  <Typography color="text.secondary">No data available for word cloud</Typography>
+                ) : (
+                  <Box sx={{ 
+                    width: '100%', 
+                    height: '100%', 
+                    display: 'flex', 
+                    flexWrap: 'wrap', 
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    position: 'relative'
+                  }}>
+                    {wordCloudData.map((word, index) => {
+                      // Calculate font size based on frequency (value)
+                      // Scale between 12px and 60px
+                      const fontSize = 12 + (word.value / wordCloudMax) * 48;
+                      
+                      // Generate a color based on frequency
+                      const hue = 210 + (word.value / wordCloudMax) * 150; // Blue to purple spectrum
+                      const color = `hsl(${hue}, 70%, 50%)`;
+                      
+                      return (
+                        <Box 
+                          key={index}
+                          component="span"
+                          sx={{
+                            fontSize: `${fontSize}px`,
+                            fontWeight: 'bold',
+                            color: color,
+                            padding: '5px 8px',
+                            display: 'inline-block',
+                            cursor: 'pointer',
+                            transition: 'transform 0.2s',
+                            '&:hover': {
+                              transform: 'scale(1.1)'
+                            }
+                          }}
+                          onClick={() => {
+                            // Show a snackbar with the word frequency
+                            setSnackbarMessage(`"${word.text}" appears ${word.value} times in responses`);
+                            setSnackbarSeverity('info');
+                            setSnackbarOpen(true);
                           }}
                         >
-                          <Typography variant="body1" sx={{ mb: 2, whiteSpace: 'pre-wrap' }}>
+                          {word.text}
+                        </Box>
+                      );
+                    })}
+                  </Box>
+                )}
+              </Paper>
+              
+              <Box sx={{ mb: 3 }}>
+                <Typography variant="subtitle1" gutterBottom>
+                  Top 20 Words
+                </Typography>
+                <Grid container spacing={2}>
+                  {wordCloudData.slice(0, 20).map((word, index) => (
+                    <Grid item xs={6} sm={4} md={3} key={index}>
+                      <Paper 
+                        elevation={1} 
+                        sx={{ 
+                          p: 2, 
+                          display: 'flex', 
+                          justifyContent: 'space-between',
+                          alignItems: 'center'
+                        }}
+                      >
+                        <Typography variant="body1" fontWeight="medium">
+                          {word.text}
+                        </Typography>
+                        <Chip 
+                          label={word.value} 
+                          size="small" 
+                          color="primary"
+                        />
+                      </Paper>
+                    </Grid>
+                  ))}
+                </Grid>
+              </Box>
+            </Box>
+          )}
+          
+          {/* Tasks Tab */}
+          {activeTab === "tasks" && (
+            <Box>
+              <Typography variant="h6" gutterBottom>
+                Task-Based Analysis
+              </Typography>
+              
+              {taskGroups.map((taskGroup) => (
+                <Accordion 
+                  key={taskGroup.id}
+                  expanded={expandedAccordions[taskGroup.id] !== false}
+                  onChange={handleAccordionChange(taskGroup.id)}
+                  sx={{ 
+                    mb: 2, 
+                    boxShadow: 3, 
+                    borderLeft: '5px solid #1976d2'
+                  }}
+                >
+                  <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                    <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                      <AssignmentIcon sx={{ mr: 1, color: '#1976d2' }} />
+                      <Typography variant="subtitle1" fontWeight="bold">
+                        {taskGroup.name}
+                      </Typography>
+                      <Chip 
+                        label={taskGroup.count} 
+                        size="small" 
+                        sx={{ ml: 1, bgcolor: '#bbdefb', color: '#1976d2' }}
+                      />
+                    </Box>
+                  </AccordionSummary>
+                  <AccordionDetails>
+                    {taskGroup.responses.map((response) => (
+                      <Paper 
+                        key={response.id} 
+                        elevation={1} 
+                        sx={{ 
+                          p: 2, 
+                          mb: 2, 
+                          borderLeft: '3px solid #1976d2',
+                          bgcolor: '#f8fbff'
+                        }}
+                      >
+                        <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                          {response.question}
+                        </Typography>
+                        <Typography variant="body1">
+                          {response.response}
+                        </Typography>
+                        <Box sx={{ mt: 1, mb: 1 }}>
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                            <strong>Tasks:</strong> {identifyTasks(response.response).join(', ')}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                            <strong>Mood:</strong> {identifyMood(response.response)}
+                          </Typography>
+                        </Box>
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 1 }}>
+                          <Typography variant="caption" color="text.secondary">
+                            Participant: {response.participantId}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {new Date(response.date).toLocaleDateString()}
+                          </Typography>
+                        </Box>
+                      </Paper>
+                    ))}
+                  </AccordionDetails>
+                </Accordion>
+              ))}
+              
+              {taskGroups.length === 0 && (
+                <Typography color="text.secondary">No tasks identified</Typography>
+              )}
+            </Box>
+          )}
+          
+          {/* Mood Tab */}
+          {activeTab === "moods" && (
+            <Box>
+              <Typography variant="h6" gutterBottom>
+                Mood-Based Analysis
+              </Typography>
+              
+              {moodGroups.map((moodGroup) => {
+                // Define color based on mood
+                let moodColor = '#607d8b'; // Default gray
+                let bgColor = '#f5f5f5';
+                
+                switch(moodGroup.name.toLowerCase()) {
+                  case 'positive':
+                    moodColor = '#2e7d32'; // Green
+                    bgColor = '#f8fff8';
+                    break;
+                  case 'negative':
+                    moodColor = '#d32f2f'; // Red
+                    bgColor = '#fff8f8';
+                    break;
+                  case 'anxious':
+                    moodColor = '#ed6c02'; // Orange
+                    bgColor = '#fff8f0';
+                    break;
+                  case 'neutral':
+                    moodColor = '#9c27b0'; // Purple
+                    bgColor = '#faf4fb';
+                    break;
+                  default:
+                    break;
+                }
+                
+                return (
+                  <Accordion 
+                    key={moodGroup.id}
+                    expanded={expandedAccordions[moodGroup.id] !== false}
+                    onChange={handleAccordionChange(moodGroup.id)}
+                    sx={{ 
+                      mb: 2, 
+                      boxShadow: 3, 
+                      borderLeft: `5px solid ${moodColor}`
+                    }}
+                  >
+                    <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                      <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                        <MoodIcon sx={{ mr: 1, color: moodColor }} />
+                        <Typography variant="subtitle1" fontWeight="bold">
+                          {moodGroup.name}
+                        </Typography>
+                        <Chip 
+                          label={moodGroup.count} 
+                          size="small" 
+                          sx={{ ml: 1, bgcolor: bgColor, color: moodColor }}
+                        />
+                      </Box>
+                    </AccordionSummary>
+                    <AccordionDetails>
+                      {moodGroup.responses.map((response) => (
+                        <Paper 
+                          key={response.id} 
+                          elevation={1} 
+                          sx={{ 
+                            p: 2, 
+                            mb: 2, 
+                            borderLeft: `3px solid ${moodColor}`,
+                            bgcolor: bgColor
+                          }}
+                        >
+                          <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                            {response.question}
+                          </Typography>
+                          <Typography variant="body1">
                             {response.response}
                           </Typography>
-                          <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 'auto' }}>
+                          <Box sx={{ mt: 1, mb: 1 }}>
+                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                              <strong>Tasks:</strong> {identifyTasks(response.response).join(', ')}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                              <strong>Mood:</strong> {identifyMood(response.response)}
+                            </Typography>
+                          </Box>
+                          <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 1 }}>
                             <Typography variant="caption" color="text.secondary">
-                              {response.participantId}
+                              Participant: {response.participantId}
                             </Typography>
                             <Typography variant="caption" color="text.secondary">
                               {new Date(response.date).toLocaleDateString()}
                             </Typography>
                           </Box>
                         </Paper>
-                      </Grid>
+                      ))}
+                    </AccordionDetails>
+                  </Accordion>
+                );
+              })}
+              
+              {moodGroups.length === 0 && (
+                <Typography color="text.secondary">No moods identified</Typography>
+              )}
+            </Box>
+          )}
+          
+          {/* Semantic Clusters Tab */}
+          {activeTab === "semantic" && (
+            <Box>
+              <Typography variant="h6" gutterBottom>
+                Semantic Clusters
+              </Typography>
+              
+              {semanticClusters.map((cluster) => (
+                <Accordion 
+                  key={cluster.group_name}
+                  expanded={expandedAccordions[cluster.group_name] !== false}
+                  onChange={handleAccordionChange(cluster.group_name)}
+                  sx={{ 
+                    mb: 2, 
+                    boxShadow: 3, 
+                    borderLeft: '5px solid #1976d2'
+                  }}
+                >
+                  <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                    <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                      <InfoIcon sx={{ mr: 1, color: '#1976d2' }} />
+                      <Typography variant="subtitle1" fontWeight="bold">
+                        {cluster.group_name}
+                      </Typography>
+                      <Chip 
+                        label={cluster.responses.length} 
+                        size="small" 
+                        sx={{ ml: 1, bgcolor: '#bbdefb', color: '#1976d2' }}
+                      />
+                    </Box>
+                  </AccordionSummary>
+                  <AccordionDetails>
+                    {cluster.responses.map((response) => (
+                      <Paper 
+                        key={response.id} 
+                        elevation={1} 
+                        sx={{ 
+                          p: 2, 
+                          mb: 2, 
+                          borderLeft: '3px solid #1976d2',
+                          bgcolor: '#f8fbff'
+                        }}
+                      >
+                        <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                          {response.question}
+                        </Typography>
+                        <Typography variant="body1">
+                          {response.response}
+                        </Typography>
+                        <Box sx={{ mt: 1, mb: 1 }}>
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                            <strong>Tasks:</strong> {identifyTasks(response.response).join(', ')}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                            <strong>Mood:</strong> {identifyMood(response.response)}
+                          </Typography>
+                        </Box>
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 1 }}>
+                          <Typography variant="caption" color="text.secondary">
+                            Participant: {response.participantId}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {new Date(response.date).toLocaleDateString()}
+                          </Typography>
+                        </Box>
+                      </Paper>
                     ))}
-                  </Grid>
-                </Box>
-              ))
-            )}
-          </Grid>
-        </Grid>
+                  </AccordionDetails>
+                </Accordion>
+              ))}
+              
+              {semanticClusters.length === 0 && (
+                <Typography color="text.secondary">No semantic clusters identified</Typography>
+              )}
+            </Box>
+          )}
+        </>
       )}
       
       {/* Add/Edit Group Dialog */}
@@ -1191,10 +2083,83 @@ function AutoAffinityMap({ projectId }) {
         </DialogActions>
       </Dialog>
       
+      {/* Filter Dialog */}
+      <Dialog open={filterDialogOpen} onClose={handleFilterDialogClose} maxWidth="sm" fullWidth>
+        <DialogTitle>Filter Options</DialogTitle>
+        <DialogContent>
+          <Box sx={{ mb: 3 }}>
+            <Typography variant="subtitle1" gutterBottom>Pain Points</Typography>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={currentFilters.painPoints}
+                  onChange={(e) => handleFilterChange('painPoints', e.target.checked)}
+                />
+              }
+              label="Show Pain Points"
+            />
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={currentFilters.nonPainPoints}
+                  onChange={(e) => handleFilterChange('nonPainPoints', e.target.checked)}
+                />
+              }
+              label="Show Non-Pain Points"
+            />
+          </Box>
+          
+          {taskGroups.length > 0 && (
+            <Box sx={{ mb: 3 }}>
+              <Typography variant="subtitle1" gutterBottom>Tasks</Typography>
+              {taskGroups.map(task => (
+                <FormControlLabel
+                  key={task.id}
+                  control={
+                    <Switch
+                      checked={currentFilters.tasks[task.id] !== false}
+                      onChange={(e) => handleFilterChange('tasks', {
+                        ...currentFilters.tasks,
+                        [task.id]: e.target.checked
+                      })}
+                    />
+                  }
+                  label={`${task.name} (${task.count})`}
+                />
+              ))}
+            </Box>
+          )}
+          
+          {moodGroups.length > 0 && (
+            <Box sx={{ mb: 3 }}>
+              <Typography variant="subtitle1" gutterBottom>Moods</Typography>
+              {moodGroups.map(mood => (
+                <FormControlLabel
+                  key={mood.id}
+                  control={
+                    <Switch
+                      checked={currentFilters.moods[mood.id] !== false}
+                      onChange={(e) => handleFilterChange('moods', {
+                        ...currentFilters.moods,
+                        [mood.id]: e.target.checked
+                      })}
+                    />
+                  }
+                  label={`${mood.name} (${mood.count})`}
+                />
+              ))}
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleFilterDialogClose}>Close</Button>
+        </DialogActions>
+      </Dialog>
+      
       {/* Export Menu */}
       <Menu
         anchorEl={exportMenuAnchorEl}
-        open={Boolean(exportMenuAnchorEl)}
+        open={exportMenuOpen}
         onClose={handleCloseExportMenu}
       >
         <MenuItem onClick={() => { exportAffinityMap('json'); handleCloseExportMenu(); }}>
@@ -1203,7 +2168,13 @@ function AutoAffinityMap({ projectId }) {
         <MenuItem onClick={() => { exportAffinityMap('csv'); handleCloseExportMenu(); }}>
           Export as CSV
         </MenuItem>
-        <MenuItem onClick={() => { exportAffinityMap('evaluation'); handleCloseExportMenu(); }}>
+        <MenuItem onClick={() => { exportDataDirectly('json'); handleCloseExportMenu(); }}>
+          Export JSON (Direct)
+        </MenuItem>
+        <MenuItem onClick={() => { exportDataDirectly('csv'); handleCloseExportMenu(); }}>
+          Export CSV (Direct)
+        </MenuItem>
+        <MenuItem onClick={() => { exportAIEvaluation(); handleCloseExportMenu(); }}>
           <Box sx={{ display: 'flex', alignItems: 'center' }}>
             <AssessmentIcon fontSize="small" sx={{ mr: 1 }} />
             Export for AI Evaluation
@@ -1224,6 +2195,6 @@ function AutoAffinityMap({ projectId }) {
       </Snackbar>
     </Box>
   );
-}
+};
 
-export default AutoAffinityMap;
+export default Synthesis;

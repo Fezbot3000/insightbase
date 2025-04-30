@@ -52,7 +52,7 @@ import AIInsights from './AIInsights';
 import ParticipantManager from './ParticipantManager';
 import AffinityMap from './AffinityMap';
 import AutoAffinityMap from './AutoAffinityMap';
-import AffinityMapEvaluator from './AffinityMapEvaluator';
+import AnalysisMapping from './AnalysisMapping';
 
 function ProjectPage() {
   const { projectId } = useParams();
@@ -682,7 +682,7 @@ function ProjectPage() {
           >
             <Tab value="manual" label="Manual Affinity Map" />
             <Tab value="auto" label="Auto Affinity Map" />
-            <Tab value="evaluator" label="Evaluator" />
+            <Tab value="evaluator" label="Analysis Mapping" />
           </Tabs>
           
           {rawProcessingTab === 'manual' ? (
@@ -690,7 +690,7 @@ function ProjectPage() {
           ) : rawProcessingTab === 'auto' ? (
             <AutoAffinityMap projectId={projectId} />
           ) : (
-            <AffinityMapEvaluator />
+            <AnalysisMapping projectId={projectId} />
           )}
         </Box>
       )}

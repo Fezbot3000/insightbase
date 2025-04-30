@@ -14,10 +14,11 @@ function Header() {
     <AppBar position="static" sx={{ 
       backgroundColor: theme.palette.background.paper, 
       color: theme.palette.text.primary,
-      boxShadow: '0 1px 3px rgba(0,0,0,0.12)'
+      boxShadow: '0 1px 3px rgba(0,0,0,0.12)',
+      height: '40px'
     }}>
       <Container maxWidth="lg">
-        <Toolbar disableGutters>
+        <Toolbar disableGutters sx={{ minHeight: '40px', py: 0 }}>
           <Box 
             component={Link} 
             to="/"
@@ -27,9 +28,9 @@ function Header() {
               textDecoration: 'none'
             }}
           >
-            <InsightsIcon sx={{ mr: 1, color: theme.palette.primary.main }} />
+            <InsightsIcon sx={{ mr: 1, color: theme.palette.primary.main, fontSize: '1.2rem' }} />
             <Typography
-              variant="h6"
+              variant="subtitle1"
               noWrap
               sx={{
                 mr: 2,

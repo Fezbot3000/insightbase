@@ -515,7 +515,7 @@ function ParticipantManager({ onProcessedDataChange, projectId }) {
       
       <Grid container spacing={2}>
         {/* Participant List */}
-        <Grid item xs={12} md={4}>
+        <Grid item xs={12} md={5}>
           <Paper sx={{ height: '100%', minHeight: 400 }}>
             <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
               <Typography variant="h6">Participants</Typography>
@@ -578,7 +578,7 @@ function ParticipantManager({ onProcessedDataChange, projectId }) {
         </Grid>
         
         {/* Participant Details */}
-        <Grid item xs={12} md={8}>
+        <Grid item xs={12} md={7}>
           <Paper sx={{ height: '100%', minHeight: 400 }}>
             {selectedParticipant ? (
               <>
